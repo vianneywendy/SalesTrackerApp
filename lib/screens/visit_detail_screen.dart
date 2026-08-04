@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:geocoding/geocoding.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class VisitDetailScreen extends StatefulWidget {
   const VisitDetailScreen({
@@ -10,22 +12,27 @@ class VisitDetailScreen extends StatefulWidget {
   final Map<String, dynamic> visit;
 
   @override
-  State<VisitDetailScreen> createState() =>
-      _VisitDetailScreenState();
+  State<VisitDetailScreen> createState() => _VisitDetailScreenState();
 }
 
 class _VisitDetailScreenState extends State<VisitDetailScreen> {
+  final Geocoding geocoding = Geocoding();
+  
   String? signedPhotoUrl;
-  bool isLoadingPhoto = false;
+  String? readableAddress;
 
-  @override
+  bool isLoadingPhoto = false;
+  bool isLoadingAddress = false;
+
+    @override
   void initState() {
     super.initState();
     loadPhoto();
+    loadAddress();
   }
 
   Future<void> loadPhoto() async {
-    final photoPath = widget.visit['photo_path'] as String?;
+    final photoPath = widget.visit['photo_path']?.toString();
 
     if (photoPath == null || photoPath.isEmpty) {
       return;
@@ -56,32 +63,162 @@ class _VisitDetailScreenState extends State<VisitDetailScreen> {
         isLoadingPhoto = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Unable to load photo: $error'),
-        ),
-      );
+      showMessage('Unable to load photo: $error');
     }
+  }
+
+  Future<void> loadAddress() async {
+    final latitude =
+        (widget.visit['latitude'] as num?)?.toDouble();
+
+    final longitude =
+        (widget.visit['longitude'] as num?)?.toDouble();
+
+    if (latitude == null || longitude == null) {
+      setState(() {
+        readableAddress = 'Location unavailable';
+      });
+      return;
+    }
+
+    setState(() {
+      isLoadingAddress = true;
+    });
+
+    try {
+      final placemarks =
+          await geocoding.placemarkFromCoordinates(
+        latitude,
+        longitude,
+      );
+
+      if (!mounted) return;
+
+      if (placemarks.isEmpty) {
+        setState(() {
+          readableAddress = 'Address unavailable';
+          isLoadingAddress = false;
+        });
+        return;
+      }
+
+      final place = placemarks.first;
+      final addressParts = <String>[];
+
+      void addAddressPart(String? value) {
+        final cleanedValue = value?.trim();
+
+        if (cleanedValue != null &&
+            cleanedValue.isNotEmpty &&
+            !addressParts.contains(cleanedValue)) {
+          addressParts.add(cleanedValue);
+        }
+      }
+
+      addAddressPart(place.street);
+      addAddressPart(place.subLocality);
+          
+
+      setState(() {
+        readableAddress = addressParts.isEmpty
+            ? 'Address unavailable'
+            : addressParts.join(', ');
+
+        isLoadingAddress = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() {
+        readableAddress = 'Unable to determine address';
+        isLoadingAddress = false;
+      });
+
+      debugPrint('Reverse geocoding error: $error');
+    }
+  }
+
+  Future<void> openInGoogleMaps() async {
+    final latitude =
+        (widget.visit['latitude'] as num?)?.toDouble();
+
+    final longitude =
+        (widget.visit['longitude'] as num?)?.toDouble();
+
+    if (latitude == null || longitude == null) {
+      showMessage('Location coordinates are unavailable.');
+      return;
+    }
+
+    final uri = Uri.parse(
+      'https://www.google.com/maps/search/?api=1'
+      '&query=$latitude,$longitude',
+    );
+
+    try {
+      final opened = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (!opened && mounted) {
+        showMessage('Unable to open Google Maps.');
+      }
+    } catch (error) {
+      if (!mounted) return;
+
+      showMessage('Unable to open Google Maps: $error');
+    }
+  }
+
+  void showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+      ),
+    );
+  }
+
+  String formatVisitTime(DateTime visitTime) {
+    final day = visitTime.day.toString().padLeft(2, '0');
+    final month = visitTime.month.toString().padLeft(2, '0');
+    final year = visitTime.year;
+
+    final hour = visitTime.hour.toString().padLeft(2, '0');
+    final minute = visitTime.minute.toString().padLeft(2, '0');
+
+    return '$day/$month/$year, $hour:$minute';
   }
 
   @override
   Widget build(BuildContext context) {
     final visit = widget.visit;
 
-    final profile =
-        visit['profiles'] as Map<String, dynamic>?;
+    final rawProfile = visit['profiles'];
+
+    final profile = rawProfile is Map
+        ? Map<String, dynamic>.from(rawProfile)
+        : <String, dynamic>{};
 
     final salespersonName =
-        profile?['full_name']?.toString() ?? 'Unknown salesperson';
+        profile['full_name']?.toString() ?? 'Unknown salesperson';
 
-    final visitTime = DateTime.parse(
-      visit['visited_at'] as String,
-    ).toLocal();
+    final visitedAt = visit['visited_at']?.toString();
 
-    final latitude = visit['latitude'];
-    final longitude = visit['longitude'];
-    final accuracy = visit['accuracy_meters'];
+    final visitTime = visitedAt == null
+        ? null
+        : DateTime.tryParse(visitedAt)?.toLocal();
+
     final notes = visit['notes']?.toString();
+
+    final latitude =
+        (visit['latitude'] as num?)?.toDouble();
+
+    final longitude =
+        (visit['longitude'] as num?)?.toDouble();
+
+    final hasCoordinates =
+        latitude != null && longitude != null;
 
     return Scaffold(
       appBar: AppBar(
@@ -90,43 +227,7 @@ class _VisitDetailScreenState extends State<VisitDetailScreen> {
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
-          if (isLoadingPhoto)
-            const SizedBox(
-              height: 240,
-              child: Center(
-                child: CircularProgressIndicator(),
-              ),
-            )
-          else if (signedPhotoUrl != null)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: Image.network(
-                signedPhotoUrl!,
-                height: 260,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) {
-                  return const SizedBox(
-                    height: 240,
-                    child: Center(
-                      child: Text('Unable to display photo'),
-                    ),
-                  );
-                },
-              ),
-            )
-          else
-            Container(
-              height: 200,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                color: Theme.of(context)
-                    .colorScheme
-                    .surfaceContainerHighest,
-              ),
-              child: const Text('No photo available'),
-            ),
+          _buildPhotoSection(context),
 
           const SizedBox(height: 24),
 
@@ -151,51 +252,183 @@ class _VisitDetailScreenState extends State<VisitDetailScreen> {
           _DetailRow(
             icon: Icons.access_time,
             label: 'Visit time',
-            value:
-                '${visitTime.day}/${visitTime.month}/${visitTime.year} '
-                '${visitTime.hour.toString().padLeft(2, '0')}:'
-                '${visitTime.minute.toString().padLeft(2, '0')}',
+            value: visitTime == null
+                ? 'Time unavailable'
+                : formatVisitTime(visitTime),
           ),
 
-          _DetailRow(
-            icon: Icons.location_on_outlined,
-            label: 'Latitude',
-            value: latitude?.toString() ?? '-',
+          _buildLocationSection(
+            context,
+            hasCoordinates: hasCoordinates,
           ),
 
-          _DetailRow(
-            icon: Icons.location_on,
-            label: 'Longitude',
-            value: longitude?.toString() ?? '-',
-          ),
+          const SizedBox(height: 24),
 
-          _DetailRow(
-            icon: Icons.gps_fixed,
-            label: 'GPS accuracy',
-            value: accuracy == null
-                ? '-'
-                : '${accuracy.toString()} metres',
+          _buildNotesSection(
+            context,
+            notes: notes,
           ),
+        ],
+      ),
+    );
+  }
 
+  Widget _buildPhotoSection(BuildContext context) {
+    if (isLoadingPhoto) {
+      return const SizedBox(
+        height: 240,
+        child: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
+    if (signedPhotoUrl != null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Image.network(
+          signedPhotoUrl!,
+          height: 260,
+          width: double.infinity,
+          fit: BoxFit.cover,
+          errorBuilder: (
+            context,
+            error,
+            stackTrace,
+          ) {
+            return const _PhotoPlaceholder(
+              message: 'Unable to display photo',
+            );
+          },
+        ),
+      );
+    }
+
+    return const _PhotoPlaceholder(
+      message: 'No photo available',
+    );
+  }
+
+  Widget _buildLocationSection(
+    BuildContext context, {
+    required bool hasCoordinates,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.location_on_outlined),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Location',
+                    style:
+                        Theme.of(context).textTheme.labelMedium,
+                  ),
+                  const SizedBox(height: 4),
+
+                  if (isLoadingAddress)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: LinearProgressIndicator(),
+                    )
+                  else
+                    Text(
+                      readableAddress ?? 'Address unavailable',
+                      style:
+                          Theme.of(context).textTheme.bodyLarge,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+
+        if (hasCoordinates) ...[
           const SizedBox(height: 16),
 
-          Text(
-            'Notes',
-            style: Theme.of(context)
-                .textTheme
-                .titleMedium
-                ?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: OutlinedButton.icon(
+              onPressed: openInGoogleMaps,
+              icon: const Icon(Icons.map_outlined),
+              label: const Text(
+                'OPEN IN GOOGLE MAPS',
+              ),
+            ),
           ),
+        ],
+      ],
+    );
+  }
 
+  Widget _buildNotesSection(
+    BuildContext context, {
+    required String? notes,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Icon(Icons.notes_outlined),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Notes',
+                style:
+                    Theme.of(context).textTheme.labelMedium,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                notes == null || notes.trim().isEmpty
+                    ? 'No notes provided.'
+                    : notes,
+                style:
+                    Theme.of(context).textTheme.bodyLarge,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PhotoPlaceholder extends StatelessWidget {
+  const _PhotoPlaceholder({
+    required this.message,
+  });
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 220,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        color: Theme.of(context)
+            .colorScheme
+            .surfaceContainerHighest,
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(
+            Icons.image_not_supported_outlined,
+            size: 40,
+          ),
           const SizedBox(height: 8),
-
-          Text(
-            notes == null || notes.isEmpty
-                ? 'No notes provided.'
-                : notes,
-          ),
+          Text(message),
         ],
       ),
     );
@@ -216,7 +449,7 @@ class _DetailRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: 18),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -228,12 +461,14 @@ class _DetailRow extends StatelessWidget {
               children: [
                 Text(
                   label,
-                  style: Theme.of(context).textTheme.labelMedium,
+                  style:
+                      Theme.of(context).textTheme.labelMedium,
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 4),
                 Text(
                   value,
-                  style: Theme.of(context).textTheme.bodyLarge,
+                  style:
+                      Theme.of(context).textTheme.bodyLarge,
                 ),
               ],
             ),
