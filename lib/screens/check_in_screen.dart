@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class CheckInScreen extends StatefulWidget {
@@ -12,20 +16,78 @@ class _CheckInScreenState extends State<CheckInScreen> {
   final storeController = TextEditingController();
   final notesController = TextEditingController();
 
-  bool photoCaptured = false;
-  bool locationCaptured = false;
+  final ImagePicker imagePicker = ImagePicker();
+
+  XFile? capturedPhoto;
+  Position? capturedPosition;
   bool isSubmitting = false;
 
-  void simulatePhoto() {
-    setState(() {
-      photoCaptured = true;
-    });
+  Future<void> takePhoto() async {
+    try {
+      final photo = await imagePicker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 70,
+        maxWidth: 1600,
+      );
+
+      if (photo == null || !mounted) return;
+
+      setState(() {
+        capturedPhoto = photo;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      showMessage('Unable to take photo: $error');
+    }
   }
 
-  void simulateLocation() {
-    setState(() {
-      locationCaptured = true;
-    });
+  Future<void> captureLocation() async {
+    try {
+      final locationEnabled =
+          await Geolocator.isLocationServiceEnabled();
+
+      if (!locationEnabled) {
+        showMessage(
+          'Location services are disabled. Please turn on GPS.',
+        );
+        return;
+      }
+
+      var permission = await Geolocator.checkPermission();
+
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied) {
+        showMessage('Location permission was denied.');
+        return;
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        showMessage(
+          'Location permission is permanently denied. '
+          'Please enable it in phone settings.',
+        );
+        return;
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 20),
+        ),
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        capturedPosition = position;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      showMessage('Unable to capture location: $error');
+    }
   }
 
   Future<void> submitVisit() async {
@@ -37,12 +99,12 @@ class _CheckInScreenState extends State<CheckInScreen> {
       return;
     }
 
-    if (!photoCaptured) {
+    if (capturedPhoto == null) {
       showMessage('Please take a photo first.');
       return;
     }
 
-    if (!locationCaptured) {
+    if (capturedPosition == null) {
       showMessage('Please capture your location first.');
       return;
     }
@@ -50,7 +112,9 @@ class _CheckInScreenState extends State<CheckInScreen> {
     final user = Supabase.instance.client.auth.currentUser;
 
     if (user == null) {
-      showMessage('Your login session has expired. Please log in again.');
+      showMessage(
+        'Your login session has expired. Please log in again.',
+      );
       return;
     }
 
@@ -62,14 +126,11 @@ class _CheckInScreenState extends State<CheckInScreen> {
       await Supabase.instance.client.from('visits').insert({
         'salesperson_id': user.id,
         'store_name': storeName,
+        'latitude': capturedPosition!.latitude,
+        'longitude': capturedPosition!.longitude,
+        'accuracy_meters': capturedPosition!.accuracy,
 
-        // Temporary development values.
-        // These will be replaced with real phone GPS later.
-        'latitude': 0.0,
-        'longitude': 0.0,
-        'accuracy_meters': null,
-
-        // Photo upload will be added when testing on the S10.
+        // Photo upload will be added next.
         'photo_path': null,
 
         'notes': notes.isEmpty ? null : notes,
@@ -87,11 +148,9 @@ class _CheckInScreenState extends State<CheckInScreen> {
       Navigator.of(context).pop(true);
     } on PostgrestException catch (error) {
       if (!mounted) return;
-
       showMessage('Database error: ${error.message}');
     } catch (error) {
       if (!mounted) return;
-
       showMessage('Failed to submit visit: $error');
     } finally {
       if (mounted) {
@@ -136,33 +195,64 @@ class _CheckInScreenState extends State<CheckInScreen> {
                 border: OutlineInputBorder(),
               ),
             ),
+
             const SizedBox(height: 24),
+
             OutlinedButton.icon(
-              onPressed: isSubmitting ? null : simulatePhoto,
+              onPressed: isSubmitting ? null : takePhoto,
               icon: Icon(
-                photoCaptured
+                capturedPhoto != null
                     ? Icons.check_circle
                     : Icons.camera_alt_outlined,
               ),
               label: Text(
-                photoCaptured ? 'PHOTO READY' : 'TAKE PHOTO',
+                capturedPhoto != null
+                    ? 'PHOTO READY'
+                    : 'TAKE PHOTO',
               ),
             ),
+
+            if (capturedPhoto != null) ...[
+              const SizedBox(height: 16),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.file(
+                  File(capturedPhoto!.path),
+                  height: 220,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ],
+
             const SizedBox(height: 16),
+
             OutlinedButton.icon(
-              onPressed: isSubmitting ? null : simulateLocation,
+              onPressed:
+                  isSubmitting ? null : captureLocation,
               icon: Icon(
-                locationCaptured
+                capturedPosition != null
                     ? Icons.check_circle
                     : Icons.my_location,
               ),
               label: Text(
-                locationCaptured
+                capturedPosition != null
                     ? 'LOCATION CAPTURED'
                     : 'CAPTURE LOCATION',
               ),
             ),
+
+            if (capturedPosition != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Accuracy: '
+                '${capturedPosition!.accuracy.toStringAsFixed(1)} m',
+                textAlign: TextAlign.center,
+              ),
+            ],
+
             const SizedBox(height: 24),
+
             TextField(
               controller: notesController,
               enabled: !isSubmitting,
@@ -174,11 +264,14 @@ class _CheckInScreenState extends State<CheckInScreen> {
                 border: OutlineInputBorder(),
               ),
             ),
+
             const SizedBox(height: 32),
+
             SizedBox(
               height: 54,
               child: FilledButton(
-                onPressed: isSubmitting ? null : submitVisit,
+                onPressed:
+                    isSubmitting ? null : submitVisit,
                 child: isSubmitting
                     ? const SizedBox(
                         width: 22,
