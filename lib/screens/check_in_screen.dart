@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:path/path.dart' as path;
 
 class CheckInScreen extends StatefulWidget {
   const CheckInScreen({super.key});
@@ -123,16 +124,26 @@ class _CheckInScreenState extends State<CheckInScreen> {
     });
 
     try {
+      final file = File(capturedPhoto!.path);
+
+      final fileName =
+          '${user.id}_${DateTime.now().millisecondsSinceEpoch}${path.extension(file.path)}';
+
+      await Supabase.instance.client.storage
+          .from('visit-photos')
+          .upload(
+            fileName,
+            file,
+          );
+
+      final photoPath = fileName;
       await Supabase.instance.client.from('visits').insert({
         'salesperson_id': user.id,
         'store_name': storeName,
         'latitude': capturedPosition!.latitude,
         'longitude': capturedPosition!.longitude,
         'accuracy_meters': capturedPosition!.accuracy,
-
-        // Photo upload will be added next.
-        'photo_path': null,
-
+        'photo_path': photoPath,
         'notes': notes.isEmpty ? null : notes,
         'visited_at': DateTime.now().toUtc().toIso8601String(),
       });
