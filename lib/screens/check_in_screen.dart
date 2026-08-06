@@ -53,24 +53,53 @@ class _CheckInScreenState extends State<CheckInScreen> {
     }
 
     try {
-      final data = await Supabase.instance.client
-          .from('stores')
-          .select(
-            'id, name, address, normalized_name, is_active',
-          )
-          .eq('is_active', true)
-          .order('name');
+      const pageSize = 500;
+      var start = 0;
 
-      final loadedStores = data
-          .map<Map<String, dynamic>>(
-            (store) => Map<String, dynamic>.from(store),
-          )
-          .toList();
+      final allStores = <Map<String, dynamic>>[];
+
+      while (true) {
+        final data = await Supabase.instance.client
+            .from('stores')
+            .select(
+              '''
+                id,
+                name,
+                address,
+                city,
+                nickname,
+                official_name,
+                display_name,
+                normalized_name,
+                is_active
+              ''',
+            )
+            .eq('is_active', true)
+            .order('name')
+            .range(
+              start,
+              start + pageSize - 1,
+            );
+
+        final page = data
+            .map<Map<String, dynamic>>(
+              (store) => Map<String, dynamic>.from(store),
+            )
+            .toList();
+
+        allStores.addAll(page);
+
+        if (page.length < pageSize) {
+          break;
+        }
+
+        start += pageSize;
+      }
 
       if (!mounted) return;
 
       setState(() {
-        stores = loadedStores;
+        stores = allStores;
         isLoadingStores = false;
       });
     } on PostgrestException catch (error) {
@@ -81,7 +110,7 @@ class _CheckInScreenState extends State<CheckInScreen> {
       });
 
       showMessage(
-        'Unable to load stores: ${error.message}',
+        'Unable to load customers: ${error.message}',
       );
     } catch (error) {
       if (!mounted) return;
@@ -90,7 +119,9 @@ class _CheckInScreenState extends State<CheckInScreen> {
         isLoadingStores = false;
       });
 
-      showMessage('Unable to load stores: $error');
+      showMessage(
+        'Unable to load customers: $error',
+      );
     }
   }
 
@@ -134,12 +165,25 @@ class _CheckInScreenState extends State<CheckInScreen> {
           .from('stores')
           .insert({
             'name': cleanedName,
+            'display_name': cleanedName,
+            'official_name': cleanedName,
             'normalized_name': normalizedName,
+            'source': 'manual',
             'created_by': user.id,
             'is_active': true,
           })
           .select(
-            'id, name, address, normalized_name, is_active',
+            '''
+              id,
+              name,
+              address,
+              city,
+              nickname,
+              official_name,
+              display_name,
+              normalized_name,
+              is_active
+            ''',
           )
           .single();
 
@@ -174,7 +218,17 @@ class _CheckInScreenState extends State<CheckInScreen> {
           final existingStore = await Supabase.instance.client
               .from('stores')
               .select(
-                'id, name, address, normalized_name, is_active',
+                '''
+              id,
+              name,
+              address,
+              city,
+              nickname,
+              official_name,
+              display_name,
+              normalized_name,
+              is_active
+            ''',
               )
               .eq('normalized_name', normalizedName)
               .eq('is_active', true)
@@ -409,7 +463,8 @@ class _CheckInScreenState extends State<CheckInScreen> {
   @override
   Widget build(BuildContext context) {
     final selectedStoreName =
-        selectedStore?['name']?.toString();
+        selectedStore?['name']?.toString() ??
+            selectedStore?['display_name']?.toString();
 
     return Scaffold(
       appBar: AppBar(
@@ -420,7 +475,7 @@ class _CheckInScreenState extends State<CheckInScreen> {
           padding: const EdgeInsets.all(24),
           children: [
             Text(
-              'Store',
+              'Customer',
               style: Theme.of(context)
                   .textTheme
                   .labelLarge,
@@ -458,7 +513,7 @@ class _CheckInScreenState extends State<CheckInScreen> {
                   isLoadingStores
                       ? 'Loading stores...'
                       : selectedStoreName ??
-                          'Select or add a store',
+                          'Select or add a customer',
                   style: selectedStoreName == null
                       ? Theme.of(context)
                           .textTheme
@@ -619,11 +674,18 @@ class _StorePickerDialogState
     }
 
     return widget.stores.where((store) {
-      final storeName =
-          store['name']?.toString() ?? '';
+      final searchableFields = [
+        store['name'],
+        store['display_name'],
+        store['official_name'],
+        store['nickname'],
+        store['city'],
+      ];
 
-      return normalize(storeName)
-          .contains(normalizedSearch);
+      return searchableFields.any((field) {
+        return normalize(field?.toString() ?? '')
+            .contains(normalizedSearch);
+      });
     }).toList();
   }
 
@@ -643,6 +705,19 @@ class _StorePickerDialogState
 
       return normalizedStoreName == normalizedSearch;
     });
+  }
+
+  Widget? _buildCustomerSubtitle(
+    Map<String, dynamic> store,
+  ) {
+    final city =
+        store['city']?.toString().trim() ?? '';
+
+    if (city.isEmpty) {
+      return null;
+    }
+
+    return Text(city);
   }
 
   Future<void> addStore() async {
@@ -684,7 +759,7 @@ class _StorePickerDialogState
         searchController.text.trim();
 
     return AlertDialog(
-      title: const Text('Select Store'),
+      title: const Text('Select Customer'),
       contentPadding:
           const EdgeInsets.fromLTRB(24, 16, 24, 0),
       content: SizedBox(
@@ -703,7 +778,7 @@ class _StorePickerDialogState
                 });
               },
               decoration: const InputDecoration(
-                labelText: 'Search store',
+                labelText: 'Search customer',
                 prefixIcon: Icon(Icons.search),
                 border: OutlineInputBorder(),
               ),
@@ -719,7 +794,7 @@ class _StorePickerDialogState
                         vertical: 24,
                       ),
                       child: Text(
-                        'No matching store found.',
+                        'No matching customer found.',
                       ),
                     )
                   : ListView.separated(
@@ -740,19 +815,11 @@ class _StorePickerDialogState
                           title: Text(
                             store['name']
                                     ?.toString() ??
-                                'Unnamed store',
+                                'Unnamed customer',
                           ),
-                          subtitle:
-                              store['address'] == null ||
-                                      store['address']
-                                          .toString()
-                                          .trim()
-                                          .isEmpty
-                                  ? null
-                                  : Text(
-                                      store['address']
-                                          .toString(),
-                                    ),
+                          subtitle: _buildCustomerSubtitle(
+                            store,
+                          ),
                           onTap: () {
                             Navigator.of(context)
                                 .pop(store);
@@ -784,7 +851,7 @@ class _StorePickerDialogState
                   'Add "$enteredName"',
                 ),
                 subtitle: const Text(
-                  'Save this store for future visits',
+                  'Save this customer for future visits',
                 ),
                 enabled: !isAddingStore,
                 onTap:
