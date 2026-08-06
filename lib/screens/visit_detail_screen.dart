@@ -3,6 +3,8 @@ import 'package:geocoding/geocoding.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'customer_history_screen.dart';
+
 class VisitDetailScreen extends StatefulWidget {
   const VisitDetailScreen({
     super.key,
@@ -220,6 +222,10 @@ class _VisitDetailScreenState extends State<VisitDetailScreen> {
     final hasCoordinates =
         latitude != null && longitude != null;
 
+    final storeId = visit['store_id']?.toString();
+    final storeName =
+        visit['store_name']?.toString() ?? 'Unknown store';
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Visit Details'),
@@ -232,13 +238,36 @@ class _VisitDetailScreenState extends State<VisitDetailScreen> {
           const SizedBox(height: 24),
 
           Text(
-            visit['store_name']?.toString() ?? 'Unknown store',
+            storeName,
             style: Theme.of(context)
                 .textTheme
                 .headlineSmall
                 ?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),
+          ),
+
+          const SizedBox(height: 12),
+
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: FilledButton.tonalIcon(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => CustomerHistoryScreen(
+                      storeId: storeId,
+                      storeName: storeName,
+                    ),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.history),
+              label: const Text(
+                'VIEW CUSTOMER HISTORY',
+              ),
+            ),
           ),
 
           const SizedBox(height: 24),

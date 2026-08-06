@@ -18,11 +18,14 @@ class ManagerHomeScreen extends StatefulWidget {
 }
 
 class _ManagerHomeScreenState extends State<ManagerHomeScreen> {
+  final searchController = TextEditingController();
+
   bool isLoading = true;
 
   VisitPeriod selectedPeriod = VisitPeriod.today;
 
   List<Map<String, dynamic>> visits = [];
+  String searchText = '';
 
   int visitCount = 0;
   int activeSalespersonCount = 0;
@@ -210,6 +213,30 @@ class _ManagerHomeScreenState extends State<ManagerHomeScreen> {
     );
   }
 
+  List<Map<String, dynamic>> get filteredVisits {
+    final query = searchText.trim().toLowerCase();
+
+    if (query.isEmpty) {
+      return visits;
+    }
+
+    return visits.where((visit) {
+      final storeName =
+          visit['store_name']?.toString().toLowerCase() ?? '';
+
+      final rawProfile = visit['profiles'];
+      final profile = rawProfile is Map
+          ? Map<String, dynamic>.from(rawProfile)
+          : <String, dynamic>{};
+
+      final salespersonName =
+          profile['full_name']?.toString().toLowerCase() ?? '';
+
+      return storeName.contains(query) ||
+          salespersonName.contains(query);
+    }).toList();
+  }
+
   String get selectedPeriodLabel {
     switch (selectedPeriod) {
       case VisitPeriod.today:
@@ -266,6 +293,12 @@ class _ManagerHomeScreenState extends State<ManagerHomeScreen> {
   }
 
   @override
+  void dispose() {
+    searchController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -312,6 +345,39 @@ class _ManagerHomeScreenState extends State<ManagerHomeScreen> {
             _PeriodSelector(
               selectedPeriod: selectedPeriod,
               onChanged: changePeriod,
+            ),
+
+            const SizedBox(height: 16),
+
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+              ),
+              child: TextField(
+                controller: searchController,
+                onChanged: (value) {
+                  setState(() {
+                    searchText = value;
+                  });
+                },
+                decoration: InputDecoration(
+                  labelText: 'Search store or salesperson',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: searchText.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Clear search',
+                          onPressed: () {
+                            searchController.clear();
+                            setState(() {
+                              searchText = '';
+                            });
+                          },
+                          icon: const Icon(Icons.clear),
+                        ),
+                  border: const OutlineInputBorder(),
+                ),
+              ),
             ),
 
             const SizedBox(height: 20),
@@ -426,7 +492,7 @@ class _ManagerHomeScreenState extends State<ManagerHomeScreen> {
 
               const SizedBox(height: 8),
 
-              if (visits.isEmpty)
+              if (filteredVisits.isEmpty)
                 Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,
@@ -434,13 +500,15 @@ class _ManagerHomeScreenState extends State<ManagerHomeScreen> {
                   ),
                   child: Center(
                     child: Text(
-                      'No visits for ${selectedPeriodLabel.toLowerCase()}.',
+                      searchText.trim().isEmpty
+                          ? 'No visits for ${selectedPeriodLabel.toLowerCase()}.'
+                          : 'No visits match your search.',
                       textAlign: TextAlign.center,
                     ),
                   ),
                 )
               else
-                ...visits.map(
+                ...filteredVisits.map(
                   (visit) {
                     final rawProfile = visit['profiles'];
 
